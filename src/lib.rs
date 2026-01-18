@@ -1020,7 +1020,7 @@ where
     }
 
     fn on_submit_event(&mut self) -> EventResult {
-        if let Some(ref cb) = &self.on_submit {
+        if let Some(cb) = &self.on_submit {
             let cb = Arc::clone(cb);
             let row = self.row().unwrap();
             let index = self.item().unwrap();
