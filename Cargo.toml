@@ -1,10 +1,10 @@
 [package]
-name = "cursive_table_view"
-version = "0.15.0"
-edition = "2021"
-authors = ["Ivo Wetzel <ivo.wetzel@googlemail.com>", "Alexandre Bury <alexandre.bury@gmail.com>"]
+name = "better-cursive-table"
+version = "0.1.0"
+edition = "2024"
+authors = ["Justin Coute <jcoute59@gmail.com>, Ivo Wetzel <ivo.wetzel@googlemail.com>", "Alexandre Bury <alexandre.bury@gmail.com>"]
 description = "A basic table view implementation for cursive."
-repository = "https://github.com/BonsaiDen/cursive_table_view.git"
+repository = "https://github.com/justnc32/better-cursive-table.git"
 readme = "README.md"
 keywords = ["cursive", "ncurses", "TUI", "UI", "table"]
 categories = ["command-line-interface", "gui"]

@@ -1,31 +1,12 @@
-# cursive-table-view
+# better-cursive-table
 
-[![cursive-table-view on crates.io][cratesio-image]][cratesio]
-[![cursive-table-view on docs.rs][docsrs-image]][docsrs]
+Fork of [cursive_table_view](https://github.com/BonsaiDen/cursive_table_view), which is effectively deprecated.
 
-[cratesio-image]: https://img.shields.io/crates/v/cursive_table_view.svg
-[cratesio]: https://crates.io/crates/cursive_table_view
-[docsrs-image]: https://docs.rs/cursive_table_view/badge.svg
-[docsrs]: https://docs.rs/cursive_table_view/
+- All original functionality
+- Added 'sortability' feature for all tables to deactivate sort features
 
-A basic table view implementation for [cursive](https://crates.io/crates/cursive).
 
-![table](https://cloud.githubusercontent.com/assets/124674/25067632/a6784a56-2249-11e7-8885-50ba7058565f.png)
-
-## Usage
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-cursive_table_view = "0.14"
-```
-
-and this to your crate root:
-
-```rust
-extern crate cursive_table_view;
-```
+This is my first public project so I don't think I'm doing this right but whatever
 
 ## License
 
