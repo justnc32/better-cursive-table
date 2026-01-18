@@ -116,6 +116,7 @@ type IndexCallback = Arc<dyn Fn(&mut Cursive, usize, usize) + Send + Sync>;
 /// ```
 pub struct TableView<T, H> {
     enabled: bool,
+    sortable: bool,
     scroll_core: scroll::Core,
     needs_relayout: bool,
 
@@ -187,6 +188,7 @@ where
     pub fn new() -> Self {
         Self {
             enabled: true,
+            sortable: true,
             scroll_core: scroll::Core::new(),
             needs_relayout: true,
 
@@ -296,15 +298,16 @@ where
     /// Sorts the table using the specified table `column` and the passed
     /// `order`.
     pub fn sort_by(&mut self, column: H, order: Ordering) {
+        if !self.sortable {
+            return;
+        }
+
         if self.column_indicies.contains_key(&column) {
             for c in &mut self.columns {
                 // Move selection back to the sorted column.
-                c.selected = c.column == column;
-                if c.selected {
-                    c.order = order;
-                } else {
-                    c.order = Ordering::Equal;
-                }
+                let selected = c.column == column;
+                c.selected = selected;
+                c.order = if selected { order } else { Ordering::Equal };
             }
         }
 
@@ -314,6 +317,10 @@ where
     /// Sorts the table using the currently active column and its
     /// ordering.
     pub fn sort(&mut self) {
+        if !self.sortable || self.items.len() <= 1 {
+            return;
+        }
+
         if let Some((column, order)) = self.order() {
             self.sort_items(column, order);
         }
@@ -348,6 +355,24 @@ where
     /// Enable or disable this view.
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    /// Enable or disable sorting, header selection, and sort indicators.
+    pub fn set_sortable(&mut self, sortable: bool) {
+        self.sortable = sortable;
+        self.column_select &= sortable;
+    }
+
+    /// Enable or disable sorting, header selection, and sort indicators.
+    ///
+    /// Chainable variant.
+    pub fn sortable(self, sortable: bool) -> Self {
+        self.with(|t| t.set_sortable(sortable))
+    }
+
+    /// Returns `true` if sorting is enabled.
+    pub fn is_sortable(&self) -> bool {
+        self.sortable
     }
 
     /// Returns `true` if this view is enabled.
@@ -782,6 +807,11 @@ where
     }
 
     fn column_select(&mut self) -> EventResult {
+        if !self.sortable {
+            self.column_cancel();
+            return EventResult::Ignored;
+        }
+
         let next = self.active_column();
         let column = self.columns[next].column;
         let current = self
@@ -886,6 +916,10 @@ where
         let last_focus = self.focus;
         match event {
             Event::Key(Key::Right) => {
+                if !self.sortable {
+                    return EventResult::Ignored;
+                }
+
                 if self.column_select {
                     if !self.column_next() {
                         return EventResult::Ignored;
@@ -895,6 +929,10 @@ where
                 }
             }
             Event::Key(Key::Left) => {
+                if !self.sortable {
+                    return EventResult::Ignored;
+                }
+
                 if self.column_select {
                     if !self.column_prev() {
                         return EventResult::Ignored;
@@ -934,7 +972,7 @@ where
                 self.focus = self.items.len().saturating_sub(1);
             }
             Event::Key(Key::Enter) => {
-                if self.column_select {
+                if self.column_select && self.sortable {
                     return self.column_select();
                 } else if !self.is_empty() && self.on_submit.is_some() {
                     return self.on_submit_event();
@@ -999,8 +1037,11 @@ where
 {
     fn draw(&self, printer: &Printer) {
         self.draw_columns(printer, "╷ ", |printer, column| {
-            let color = if self.enabled && (column.order != Ordering::Equal || column.selected) {
-                if self.column_select && column.selected && self.enabled && printer.focused {
+            let color = if self.enabled
+                && self.sortable
+                && (column.order != Ordering::Equal || column.selected)
+            {
+                if self.column_select && column.selected && printer.focused {
                     theme::ColorStyle::highlight()
                 } else {
                     theme::ColorStyle::highlight_inactive()
@@ -1010,7 +1051,7 @@ where
             };
 
             printer.with_color(color, |printer| {
-                column.draw_header(printer);
+                column.draw_header(printer, self.sortable);
             });
         });
 
@@ -1022,8 +1063,10 @@ where
             },
         );
 
-        // Extend the vertical bars to the end of the view
-        for y in 2..printer.size.y {
+        // Extend the vertical bars to the end of the view.
+        let available_height = printer.size.y.saturating_sub(2);
+        let filled_rows = self.rows_to_items.len().min(available_height);
+        for y in 2 + filled_rows..printer.size.y {
             self.draw_columns(&printer.offset((0, y)), "┆ ", |_, _| ());
         }
 
@@ -1056,6 +1099,10 @@ where
                 offset,
                 event: MouseEvent::Press(MouseButton::Left),
             } if position.checked_sub(offset).map_or(false, |p| p.y == 0) => {
+                if !self.sortable {
+                    return EventResult::Ignored;
+                }
+
                 if let Some(position) = position.checked_sub(offset) {
                     if let Some(col) = self.column_for_x(position.x) {
                         if self.column_select && self.columns[col].selected {
@@ -1141,33 +1188,30 @@ impl<H: Copy + Clone + 'static> TableColumn<H> {
         }
     }
 
-    fn draw_header(&self, printer: &Printer) {
-        let order = match self.order {
-            Ordering::Less => "^",
-            Ordering::Greater => "v",
-            Ordering::Equal => " ",
+    fn draw_header(&self, printer: &Printer, sortable: bool) {
+        let title_width = if sortable {
+            self.width.saturating_sub(4)
+        } else {
+            self.width
+        };
+        let title = self.title.as_str();
+
+        let mut header = match self.alignment {
+            HAlign::Left => format!("{:<width$}", title, width = title_width),
+            HAlign::Right => format!("{:>width$}", title, width = title_width),
+            HAlign::Center => format!("{:^width$}", title, width = title_width),
         };
 
-        let header = match self.alignment {
-            HAlign::Left => format!(
-                "{:<width$} [{}]",
-                self.title,
-                order,
-                width = self.width.saturating_sub(4)
-            ),
-            HAlign::Right => format!(
-                "{:>width$} [{}]",
-                self.title,
-                order,
-                width = self.width.saturating_sub(4)
-            ),
-            HAlign::Center => format!(
-                "{:^width$} [{}]",
-                self.title,
-                order,
-                width = self.width.saturating_sub(4)
-            ),
-        };
+        if sortable {
+            let order = match self.order {
+                Ordering::Less => "^",
+                Ordering::Greater => "v",
+                Ordering::Equal => " ",
+            };
+            header.push_str(" [");
+            header.push_str(order);
+            header.push(']');
+        }
 
         printer.print((0, 0), header.as_str());
     }
