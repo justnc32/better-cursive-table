@@ -6,7 +6,7 @@ authors = ["Justin Coute <jcoute59@gmail.com>"]
 description = "TableView and ArrayView for Cursive TUIs"
 repository = "https://github.com/justnc32/better_cursive_table.git"
 readme = "README.md"
-keywords = ["cursive", "ncurses", "TUI", "UI", "table", "array"]
+keywords = ["cursive", "TUI", "UI", "table", "array"]
 categories = ["command-line-interface", "gui"]
 license = "MIT/Apache-2.0"
 
