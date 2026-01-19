@@ -1,7 +1,7 @@
 // Crate Dependencies ---------------------------------------------------------
 // ----------------------------------------------------------------------------
+extern crate better_cursive_table;
 extern crate cursive;
-extern crate cursive_table_view;
 extern crate rand;
 
 // STD Dependencies -----------------------------------------------------------
@@ -10,15 +10,15 @@ use std::cmp::Ordering;
 
 // External Dependencies ------------------------------------------------------
 // ----------------------------------------------------------------------------
+use cursive::Cursive;
 use cursive::align::HAlign;
 use cursive::traits::*;
 use cursive::views::{Dialog, TextView};
-use cursive::Cursive;
 use rand::Rng;
 
 // Modules --------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-use cursive_table_view::{TableView, TableViewItem};
+use better_cursive_table::{TableView, TableViewItem};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 enum BasicColumn {

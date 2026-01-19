@@ -1,7 +1,7 @@
 // Crate Dependencies ---------------------------------------------------------
 // ----------------------------------------------------------------------------
+extern crate better_cursive_table;
 extern crate cursive;
-extern crate cursive_table_view;
 
 // STD Dependencies -----------------------------------------------------------
 // ----------------------------------------------------------------------------
@@ -9,14 +9,14 @@ use std::cmp::Ordering;
 
 // External Dependencies ------------------------------------------------------
 // ----------------------------------------------------------------------------
+use cursive::Cursive;
 use cursive::align::HAlign;
 use cursive::traits::*;
 use cursive::views::{Dialog, TextView};
-use cursive::Cursive;
 
 // Modules --------------------------------------------------------------------
 // ----------------------------------------------------------------------------
-use cursive_table_view::{TableView, TableViewItem};
+use better_cursive_table::{TableView, TableViewItem};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 enum BasicColumn {
@@ -65,7 +65,9 @@ fn main() {
         .column(BasicColumn::Task, "Task", |c| c.align(HAlign::Center))
         .column(BasicColumn::Status, "Status", |c| c.align(HAlign::Center))
         .column(BasicColumn::Owner, "Owner", |c| c.align(HAlign::Center))
-        .column(BasicColumn::Priority, "Priority", |c| c.align(HAlign::Center))
+        .column(BasicColumn::Priority, "Priority", |c| {
+            c.align(HAlign::Center)
+        })
         .sortable(false);
 
     // Static items; order remains as inserted.
@@ -93,9 +95,12 @@ fn main() {
     // Submit still works with sorting off.
     table.set_on_submit(|siv: &mut Cursive, row: usize, index: usize| {
         let value = siv
-            .call_on_name("table", move |table: &mut TableView<TaskRow, BasicColumn>| {
-                format!("{:?}", table.borrow_item(index).unwrap())
-            })
+            .call_on_name(
+                "table",
+                move |table: &mut TableView<TaskRow, BasicColumn>| {
+                    format!("{:?}", table.borrow_item(index).unwrap())
+                },
+            )
             .unwrap();
 
         siv.add_layer(

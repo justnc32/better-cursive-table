@@ -45,6 +45,21 @@ where
         Self: Sized;
 }
 
+/// A trait for displaying items inside an
+/// [`ArrayView`](struct.ArrayView.html).
+pub trait ArrayViewItem<H>: Clone + Sized
+where
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    /// Method returning a string representation of the item for the
+    /// specified column from type `H`.
+    fn to_column(&self, column: H) -> String;
+
+    /// Method returning a string representation of the item for the row
+    /// header.
+    fn to_row(&self) -> String;
+}
+
 /// Callback used when a column is sorted.
 ///
 /// It takes the column and the ordering as input.
@@ -57,15 +72,20 @@ type OnSortCallback<H> = Arc<dyn Fn(&mut Cursive, H, Ordering) + Send + Sync>;
 /// This is a private type to help readability.
 type IndexCallback = Arc<dyn Fn(&mut Cursive, usize, usize) + Send + Sync>;
 
+/// Callback taking as argument the row and the column of an array cell.
+///
+/// This is a private type to help readability.
+type CellCallback<H> = Arc<dyn Fn(&mut Cursive, usize, H) + Send + Sync>;
+
 /// View to select an item among a list, supporting multiple columns for sorting.
 ///
 /// # Examples
 ///
 /// ```rust
 /// # extern crate cursive;
-/// # extern crate cursive_table_view;
+/// # extern crate better_cursive_table;
 /// # use std::cmp::Ordering;
-/// # use cursive_table_view::{TableView, TableViewItem};
+/// # use better_cursive_table::{TableView, TableViewItem};
 /// # use cursive::align::HAlign;
 /// # fn main() {
 /// // Provide a type for the table's columns
@@ -122,10 +142,12 @@ pub struct TableView<T, H> {
 
     column_select: bool,
     columns: Vec<TableColumn<H>>,
-    column_indicies: HashMap<H, usize>,
+    // Column enum -> columns vector index lookup.
+    column_indices: HashMap<H, usize>,
 
     focus: usize,
     items: Vec<T>,
+    // Row index -> item index after sorting.
     rows_to_items: Vec<usize>,
 
     on_sort: Option<OnSortCallback<H>>,
@@ -194,7 +216,7 @@ where
 
             column_select: false,
             columns: Vec::new(),
-            column_indicies: HashMap::new(),
+            column_indices: HashMap::new(),
 
             focus: 0,
             items: Vec::new(),
@@ -206,7 +228,7 @@ where
         }
     }
 
-    /// Adds a column for the specified table colum from type `H` along with
+    /// Adds a column for the specified table column from type `H` along with
     /// a title for its visual display.
     ///
     /// The provided callback can be used to further configure the
@@ -221,7 +243,7 @@ where
         self
     }
 
-    /// Adds a column for the specified table colum from type `H` along with
+    /// Adds a column for the specified table column from type `H` along with
     /// a title for its visual display.
     ///
     /// The provided callback can be used to further configure the
@@ -239,15 +261,15 @@ where
     pub fn remove_column(&mut self, i: usize) {
         // Update the existing indices
         for column in &self.columns[i + 1..] {
-            *self.column_indicies.get_mut(&column.column).unwrap() -= 1;
+            *self.column_indices.get_mut(&column.column).unwrap() -= 1;
         }
 
         let column = self.columns.remove(i);
-        self.column_indicies.remove(&column.column);
+        self.column_indices.remove(&column.column);
         self.needs_relayout = true;
     }
 
-    /// Adds a column for the specified table colum from type `H` along with
+    /// Adds a column for the specified table column from type `H` along with
     /// a title for its visual display.
     ///
     /// The provided callback can be used to further configure the
@@ -261,14 +283,14 @@ where
     ) {
         // Update all existing indices
         for column in &self.columns[i..] {
-            *self.column_indicies.get_mut(&column.column).unwrap() += 1;
+            *self.column_indices.get_mut(&column.column).unwrap() += 1;
         }
 
-        self.column_indicies.insert(column, i);
+        self.column_indices.insert(column, i);
         self.columns
             .insert(i, callback(TableColumn::new(column, title.into())));
 
-        // Make the first colum the default one
+        // Make the first column the default one
         if self.columns.len() == 1 {
             self.set_default_column(column);
         }
@@ -283,7 +305,7 @@ where
 
     /// Sets the initially active column of the table.
     pub fn set_default_column(&mut self, column: H) {
-        if self.column_indicies.contains_key(&column) {
+        if self.column_indices.contains_key(&column) {
             for c in &mut self.columns {
                 c.selected = c.column == column;
                 if c.selected {
@@ -302,7 +324,7 @@ where
             return;
         }
 
-        if self.column_indicies.contains_key(&column) {
+        if self.column_indices.contains_key(&column) {
             for c in &mut self.columns {
                 // Move selection back to the sorted column.
                 let selected = c.column == column;
@@ -385,9 +407,25 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.set_on_sort(|siv: &mut Cursive, column: BasicColumn, order: Ordering| {
-    ///
+    /// ```no_run
+    /// # use std::cmp::Ordering;
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let mut table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// table.set_on_sort(|_siv: &mut Cursive, _column: BasicColumn, _order: Ordering| {
     /// });
     /// ```
     pub fn set_on_sort<F>(&mut self, cb: F)
@@ -404,10 +442,26 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.on_sort(|siv: &mut Cursive, column: BasicColumn, order: Ordering| {
-    ///
-    /// });
+    /// ```no_run
+    /// # use std::cmp::Ordering;
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// let _table =
+    ///     table.on_sort(|_siv: &mut Cursive, _column: BasicColumn, _order: Ordering| {});
     /// ```
     pub fn on_sort<F>(self, cb: F) -> Self
     where
@@ -424,9 +478,25 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.set_on_submit(|siv: &mut Cursive, row: usize, index: usize| {
-    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use std::cmp::Ordering;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let mut table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// table.set_on_submit(|_siv: &mut Cursive, _row: usize, _index: usize| {
     /// });
     /// ```
     pub fn set_on_submit<F>(&mut self, cb: F)
@@ -446,10 +516,25 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.on_submit(|siv: &mut Cursive, row: usize, index: usize| {
-    ///
-    /// });
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use std::cmp::Ordering;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// let _table = table.on_submit(|_siv: &mut Cursive, _row: usize, _index: usize| {});
     /// ```
     pub fn on_submit<F>(self, cb: F) -> Self
     where
@@ -465,9 +550,25 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.set_on_select(|siv: &mut Cursive, row: usize, index: usize| {
-    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use std::cmp::Ordering;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let mut table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// table.set_on_select(|_siv: &mut Cursive, _row: usize, _index: usize| {
     /// });
     /// ```
     pub fn set_on_select<F>(&mut self, cb: F)
@@ -486,10 +587,25 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// table.on_select(|siv: &mut Cursive, row: usize, index: usize| {
-    ///
-    /// });
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use std::cmp::Ordering;
+    /// # use better_cursive_table::{TableView, TableViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum BasicColumn { Name }
+    /// # #[derive(Clone)]
+    /// # struct Item { name: String }
+    /// # impl TableViewItem<BasicColumn> for Item {
+    /// #     fn to_column(&self, column: BasicColumn) -> String {
+    /// #         match column { BasicColumn::Name => self.name.clone() }
+    /// #     }
+    /// #     fn cmp(&self, other: &Self, column: BasicColumn) -> Ordering where Self: Sized {
+    /// #         match column { BasicColumn::Name => self.name.cmp(&other.name) }
+    /// #     }
+    /// # }
+    /// # let table = TableView::<Item, BasicColumn>::new()
+    /// #     .column(BasicColumn::Name, "Name", |c| c);
+    /// let _table = table.on_select(|_siv: &mut Cursive, _row: usize, _index: usize| {});
     /// ```
     pub fn on_select<F>(self, cb: F) -> Self
     where
@@ -578,7 +694,7 @@ where
         self.with(|t| t.set_items(items))
     }
 
-    /// Returns a immmutable reference to the item at the specified index
+    /// Returns an immutable reference to the item at the specified index
     /// within the underlying storage vector.
     pub fn borrow_item(&self, index: usize) -> Option<&T> {
         self.items.get(index)
@@ -590,8 +706,8 @@ where
         self.items.get_mut(index)
     }
 
-    /// Returns a immmutable reference to the items contained within the table.
-    pub fn borrow_items(&mut self) -> &[T] {
+    /// Returns an immutable reference to the items contained within the table.
+    pub fn borrow_items(&self) -> &[T] {
         &self.items
     }
 
@@ -612,15 +728,17 @@ where
     /// Selects the item at the specified index within the underlying storage
     /// vector.
     pub fn set_selected_item(&mut self, item_index: usize) {
-        // TODO optimize the performance for very large item lists
-        if item_index < self.items.len() {
-            for (row, item) in self.rows_to_items.iter().enumerate() {
-                if *item == item_index {
-                    self.focus = row;
-                    self.scroll_core.scroll_to_y(row);
-                    break;
-                }
-            }
+        if item_index >= self.items.len() {
+            return;
+        }
+
+        if let Some(row) = self
+            .rows_to_items
+            .iter()
+            .position(|&item| item == item_index)
+        {
+            self.focus = row;
+            self.scroll_core.scroll_to_y(row);
         }
     }
 
@@ -732,15 +850,16 @@ where
         if !self.is_empty() {
             let old_item = self.item();
 
-            let mut rows_to_items = self.rows_to_items.clone();
+            let items = &self.items;
+            let rows_to_items = &mut self.rows_to_items;
+            let ascending = order == Ordering::Less;
             rows_to_items.sort_by(|a, b| {
-                if order == Ordering::Less {
-                    self.items[*a].cmp(&self.items[*b], column)
+                if ascending {
+                    items[*a].cmp(&items[*b], column)
                 } else {
-                    self.items[*b].cmp(&self.items[*a], column)
+                    items[*b].cmp(&items[*a], column)
                 }
             });
-            self.rows_to_items = rows_to_items;
 
             if let Some(old_item) = old_item {
                 self.set_selected_item(old_item);
@@ -878,12 +997,12 @@ where
         let column_count = self.columns.len();
 
         // Split up all columns into sized / unsized groups
-        let (mut sized, mut usized): (Vec<&mut TableColumn<H>>, Vec<&mut TableColumn<H>>) = self
+        let (mut sized, mut flexible): (Vec<&mut TableColumn<H>>, Vec<&mut TableColumn<H>>) = self
             .columns
             .iter_mut()
             .partition(|c| c.requested_width.is_some());
 
-        // Subtract one for the seperators between our columns (that's column_count - 1)
+        // Subtract one for the separators between our columns (that's column_count - 1)
         let available_width = size.x.saturating_sub(column_count.saturating_sub(1) * 3);
 
         // Calculate widths for all requested columns
@@ -899,10 +1018,15 @@ where
             remaining_width = remaining_width.saturating_sub(column.width);
         }
 
-        // Spread the remaining with across the unsized columns
-        let remaining_columns = usized.len();
-        for column in &mut usized {
-            column.width = (remaining_width as f32 / remaining_columns as f32).floor() as usize;
+        // Spread the remaining width across the unsized columns.
+        let remaining_columns = flexible.len();
+        let base_width = if remaining_columns > 0 {
+            remaining_width / remaining_columns
+        } else {
+            0
+        };
+        for column in &mut flexible {
+            column.width = base_width;
         }
 
         self.needs_relayout = false;
@@ -1128,6 +1252,943 @@ where
 
     fn important_area(&self, size: Vec2) -> Rect {
         self.inner_important_area(size.saturating_sub((0, 2))) + (0, 2)
+    }
+}
+
+/// View to display a 2D array with row and column headers.
+pub struct ArrayView<T, H> {
+    enabled: bool,
+    scroll_core: scroll::Core,
+    needs_relayout: bool,
+
+    columns: Vec<TableColumn<H>>,
+    row_header: ArrayRowHeader,
+    array_name: String,
+
+    focus: usize,
+    focus_col: usize,
+    items: Vec<T>,
+
+    on_submit: Option<CellCallback<H>>,
+    on_select: Option<CellCallback<H>>,
+}
+
+cursive::impl_scroller!(ArrayView < T, H > ::scroll_core);
+
+impl<T, H> Default for ArrayView<T, H>
+where
+    T: ArrayViewItem<H>,
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    /// Creates a new empty `ArrayView` without any columns.
+    ///
+    /// See [`ArrayView::new()`].
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, H> ArrayView<T, H>
+where
+    T: ArrayViewItem<H> + PartialEq,
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    /// Sets the contained items of the array.
+    ///
+    /// The current selection will be preserved when possible.
+    /// (But this is only available for `T: PartialEq`.)
+    pub fn set_items_stable(&mut self, items: Vec<T>) {
+        // Preserve selection
+        let new_location = self
+            .item()
+            .and_then(|old_item| {
+                let old_item = &self.items[old_item];
+                items.iter().position(|new| new == old_item)
+            })
+            .unwrap_or(0);
+
+        self.set_items_and_focus(items, new_location);
+    }
+}
+
+impl<T, H> ArrayView<T, H>
+where
+    T: ArrayViewItem<H>,
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    /// Creates a new empty `ArrayView` without any columns.
+    ///
+    /// An ArrayView should be accompanied by an enum of type `H` representing
+    /// the array columns.
+    pub fn new() -> Self {
+        Self {
+            enabled: true,
+            scroll_core: scroll::Core::new(),
+            needs_relayout: true,
+
+            columns: Vec::new(),
+            row_header: ArrayRowHeader::new(),
+            array_name: String::new(),
+
+            focus: 0,
+            focus_col: 0,
+            items: Vec::new(),
+
+            on_submit: None,
+            on_select: None,
+        }
+    }
+
+    /// Configures the row header column.
+    ///
+    /// Row header values are read from [`ArrayViewItem::to_row`].
+    /// The top-left corner text is set via [`ArrayView::array_name`].
+    ///
+    /// Chainable variant.
+    pub fn row_header<C: FnOnce(ArrayRowHeader) -> ArrayRowHeader>(mut self, callback: C) -> Self {
+        self.set_row_header(callback);
+        self
+    }
+
+    /// Sets the text shown in the top-left corner.
+    ///
+    /// Chainable variant.
+    pub fn array_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.set_array_name(name);
+        self
+    }
+
+    /// Sets the text shown in the top-left corner.
+    pub fn set_array_name<S: Into<String>>(&mut self, name: S) {
+        self.array_name = name.into();
+    }
+
+    /// Configures the row header column.
+    ///
+    /// Row header values are read from [`ArrayViewItem::to_row`].
+    /// The top-left corner text is set via [`ArrayView::array_name`].
+    pub fn set_row_header<C: FnOnce(ArrayRowHeader) -> ArrayRowHeader>(
+        &mut self,
+        callback: C,
+    ) {
+        self.row_header = callback(ArrayRowHeader::new());
+        self.needs_relayout = true;
+    }
+
+    /// Adds a column for the specified array column from type `H` along with
+    /// a title for its visual display.
+    ///
+    /// The provided callback can be used to further configure the
+    /// created [`TableColumn`](struct.TableColumn.html).
+    pub fn column<S: Into<String>, C: FnOnce(TableColumn<H>) -> TableColumn<H>>(
+        mut self,
+        column: H,
+        title: S,
+        callback: C,
+    ) -> Self {
+        self.add_column(column, title, callback);
+        self
+    }
+
+    /// Adds a column for the specified array column from type `H` along with
+    /// a title for its visual display.
+    ///
+    /// The provided callback can be used to further configure the
+    /// created [`TableColumn`](struct.TableColumn.html).
+    pub fn add_column<S: Into<String>, C: FnOnce(TableColumn<H>) -> TableColumn<H>>(
+        &mut self,
+        column: H,
+        title: S,
+        callback: C,
+    ) {
+        self.insert_column(self.columns.len(), column, title, callback);
+    }
+
+    /// Remove a column.
+    pub fn remove_column(&mut self, i: usize) {
+        self.columns.remove(i);
+        if self.focus_col >= self.columns.len() {
+            self.focus_col = self.columns.len().saturating_sub(1);
+        }
+        self.needs_relayout = true;
+    }
+
+    /// Adds a column for the specified array column from type `H` along with
+    /// a title for its visual display.
+    ///
+    /// The provided callback can be used to further configure the
+    /// created [`TableColumn`](struct.TableColumn.html).
+    pub fn insert_column<S: Into<String>, C: FnOnce(TableColumn<H>) -> TableColumn<H>>(
+        &mut self,
+        i: usize,
+        column: H,
+        title: S,
+        callback: C,
+    ) {
+        self.columns
+            .insert(i, callback(TableColumn::new(column, title.into())));
+        if self.focus_col >= self.columns.len() {
+            self.focus_col = self.columns.len().saturating_sub(1);
+        }
+        self.needs_relayout = true;
+    }
+
+    /// Disables this view.
+    ///
+    /// A disabled view cannot be selected.
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Re-enables this view.
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Enable or disable this view.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Returns `true` if this view is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Sets a callback to be used when `<Enter>` is pressed while a cell
+    /// is selected.
+    ///
+    /// Both the currently selected row and column will be given to the callback.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{ArrayView, ArrayViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum ArrayColumn { X }
+    /// # #[derive(Clone)]
+    /// # struct Item { label: String, value: String }
+    /// # impl ArrayViewItem<ArrayColumn> for Item {
+    /// #     fn to_column(&self, column: ArrayColumn) -> String {
+    /// #         match column { ArrayColumn::X => self.value.clone() }
+    /// #     }
+    /// #     fn to_row(&self) -> String {
+    /// #         self.label.clone()
+    /// #     }
+    /// # }
+    /// # let mut array = ArrayView::<Item, ArrayColumn>::new()
+    /// #     .row_header(|h| h.width(6))
+    /// #     .column(ArrayColumn::X, "X", |c| c);
+    /// array.set_on_submit(|_siv: &mut Cursive, _row: usize, _column: ArrayColumn| {
+    /// });
+    /// ```
+    pub fn set_on_submit<F>(&mut self, cb: F)
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.on_submit = Some(Arc::new(move |s, row, column| cb(s, row, column)));
+    }
+
+    /// Sets a callback to be used when `<Enter>` is pressed while a cell
+    /// is selected.
+    ///
+    /// Chainable variant.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{ArrayView, ArrayViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum ArrayColumn { X }
+    /// # #[derive(Clone)]
+    /// # struct Item { label: String, value: String }
+    /// # impl ArrayViewItem<ArrayColumn> for Item {
+    /// #     fn to_column(&self, column: ArrayColumn) -> String {
+    /// #         match column { ArrayColumn::X => self.value.clone() }
+    /// #     }
+    /// #     fn to_row(&self) -> String {
+    /// #         self.label.clone()
+    /// #     }
+    /// # }
+    /// # let array = ArrayView::<Item, ArrayColumn>::new()
+    /// #     .row_header(|h| h.width(6))
+    /// #     .column(ArrayColumn::X, "X", |c| c);
+    /// let _array = array.on_submit(|_siv: &mut Cursive, _row: usize, _column: ArrayColumn| {});
+    /// ```
+    pub fn on_submit<F>(self, cb: F) -> Self
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.with(|t| t.set_on_submit(cb))
+    }
+
+    /// Sets a callback to be used when a cell is selected.
+    ///
+    /// Both the currently selected row and column will be given to the callback.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{ArrayView, ArrayViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum ArrayColumn { X }
+    /// # #[derive(Clone)]
+    /// # struct Item { label: String, value: String }
+    /// # impl ArrayViewItem<ArrayColumn> for Item {
+    /// #     fn to_column(&self, column: ArrayColumn) -> String {
+    /// #         match column { ArrayColumn::X => self.value.clone() }
+    /// #     }
+    /// #     fn to_row(&self) -> String {
+    /// #         self.label.clone()
+    /// #     }
+    /// # }
+    /// # let mut array = ArrayView::<Item, ArrayColumn>::new()
+    /// #     .row_header(|h| h.width(6))
+    /// #     .column(ArrayColumn::X, "X", |c| c);
+    /// array.set_on_select(|_siv: &mut Cursive, _row: usize, _column: ArrayColumn| {
+    /// });
+    /// ```
+    pub fn set_on_select<F>(&mut self, cb: F)
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.on_select = Some(Arc::new(move |s, row, column| cb(s, row, column)));
+    }
+
+    /// Sets a callback to be used when a cell is selected.
+    ///
+    /// Chainable variant.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cursive_core::Cursive;
+    /// # use better_cursive_table::{ArrayView, ArrayViewItem};
+    /// # #[derive(Copy, Clone, PartialEq, Eq, Hash)]
+    /// # enum ArrayColumn { X }
+    /// # #[derive(Clone)]
+    /// # struct Item { label: String, value: String }
+    /// # impl ArrayViewItem<ArrayColumn> for Item {
+    /// #     fn to_column(&self, column: ArrayColumn) -> String {
+    /// #         match column { ArrayColumn::X => self.value.clone() }
+    /// #     }
+    /// #     fn to_row(&self) -> String {
+    /// #         self.label.clone()
+    /// #     }
+    /// # }
+    /// # let array = ArrayView::<Item, ArrayColumn>::new()
+    /// #     .row_header(|h| h.width(6))
+    /// #     .column(ArrayColumn::X, "X", |c| c);
+    /// let _array = array.on_select(|_siv: &mut Cursive, _row: usize, _column: ArrayColumn| {});
+    /// ```
+    pub fn on_select<F>(self, cb: F) -> Self
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.with(|t| t.set_on_select(cb))
+    }
+
+    /// Removes all items from this view.
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.focus = 0;
+        self.needs_relayout = true;
+    }
+
+    /// Returns the number of items in this array.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns `true` if this array has no items.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Returns the index of the currently selected array row.
+    pub fn row(&self) -> Option<usize> {
+        if self.items.is_empty() {
+            None
+        } else {
+            Some(self.focus)
+        }
+    }
+
+    /// Selects the row at the specified index.
+    pub fn set_selected_row(&mut self, row_index: usize) {
+        self.focus = row_index;
+        self.scroll_core.scroll_to_y(self.row_y(row_index));
+    }
+
+    /// Selects the row at the specified index.
+    ///
+    /// Chainable variant.
+    pub fn selected_row(self, row_index: usize) -> Self {
+        self.with(|t| t.set_selected_row(row_index))
+    }
+
+    /// Sets the contained items of the array.
+    pub fn set_items(&mut self, items: Vec<T>) {
+        self.set_items_and_focus(items, 0);
+    }
+
+    fn set_items_and_focus(&mut self, items: Vec<T>, new_location: usize) {
+        self.items = items;
+        self.set_selected_item(new_location);
+        self.needs_relayout = true;
+    }
+
+    /// Sets the contained items of the array.
+    ///
+    /// Chainable variant.
+    pub fn items(self, items: Vec<T>) -> Self {
+        self.with(|t| t.set_items(items))
+    }
+
+    /// Returns an immutable reference to the item at the specified index
+    /// within the underlying storage vector.
+    pub fn borrow_item(&self, index: usize) -> Option<&T> {
+        self.items.get(index)
+    }
+
+    /// Returns a mutable reference to the item at the specified index within
+    /// the underlying storage vector.
+    pub fn borrow_item_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.items.get_mut(index)
+    }
+
+    /// Returns an immutable reference to the items contained within the array.
+    pub fn borrow_items(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Returns a mutable reference to the items contained within the array.
+    ///
+    /// Can be used to modify the items in place.
+    pub fn borrow_items_mut(&mut self) -> &mut [T] {
+        self.needs_relayout = true;
+        &mut self.items
+    }
+
+    /// Returns the index of the currently selected item within the underlying
+    /// storage vector.
+    pub fn item(&self) -> Option<usize> {
+        if self.items.is_empty() {
+            None
+        } else {
+            Some(self.focus)
+        }
+    }
+
+    /// Selects the item at the specified index within the underlying storage
+    /// vector.
+    pub fn set_selected_item(&mut self, item_index: usize) {
+        if item_index < self.items.len() {
+            self.focus = item_index;
+            self.scroll_core.scroll_to_y(self.row_y(item_index));
+        }
+    }
+
+    /// Selects the item at the specified index within the underlying storage
+    /// vector.
+    ///
+    /// Chainable variant.
+    pub fn selected_item(self, item_index: usize) -> Self {
+        self.with(|t| t.set_selected_item(item_index))
+    }
+
+    /// Inserts a new item into the array.
+    ///
+    /// The item will be added to the end of the array.
+    pub fn insert_item(&mut self, item: T) {
+        self.insert_item_at(self.items.len(), item);
+    }
+
+    /// Inserts a new item into the array.
+    ///
+    /// The item will be inserted at the given index.
+    ///
+    /// # Panics
+    ///
+    /// If `index > self.len()`.
+    pub fn insert_item_at(&mut self, index: usize, item: T) {
+        self.items.insert(index, item);
+        self.needs_relayout = true;
+    }
+
+    /// Removes the item at the specified index within the underlying storage
+    /// vector and returns it.
+    pub fn remove_item(&mut self, item_index: usize) -> Option<T> {
+        if item_index < self.items.len() {
+            if let Some(selected_index) = self.item() {
+                if selected_index == item_index {
+                    self.focus_up(1);
+                }
+            }
+
+            self.needs_relayout = true;
+            Some(self.items.remove(item_index))
+        } else {
+            None
+        }
+    }
+
+    /// Removes all items from the underlying storage and returns them.
+    pub fn take_items(&mut self) -> Vec<T> {
+        self.set_selected_row(0);
+        self.needs_relayout = true;
+        self.items.drain(0..).collect()
+    }
+}
+
+impl<T, H> ArrayView<T, H>
+where
+    T: ArrayViewItem<H>,
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    fn row_y(&self, row_index: usize) -> usize {
+        row_index.saturating_mul(2)
+    }
+
+    fn row_for_y(&self, y: usize) -> Option<usize> {
+        if y % 2 == 0 {
+            Some(y / 2)
+        } else {
+            None
+        }
+    }
+
+    fn column_for_x(&self, mut x: usize) -> Option<usize> {
+        x = match x.checked_sub(self.row_header.width) {
+            None => return None,
+            Some(x) => x,
+        };
+        x = x.checked_sub(3)?;
+
+        for (i, col) in self.columns.iter().enumerate() {
+            x = match x.checked_sub(col.width) {
+                None => return Some(i),
+                Some(x) => x.checked_sub(3)?,
+            };
+        }
+
+        None
+    }
+
+    fn draw_columns<C, R>(&self, printer: &Printer, sep: &str, row_cb: R, mut col_cb: C)
+    where
+        C: FnMut(&Printer, &TableColumn<H>, usize),
+        R: Fn(&Printer, &ArrayRowHeader),
+    {
+        let row_header = &self.row_header;
+        let printer = &printer.offset((0, 0)).focused(true);
+        row_cb(printer, row_header);
+
+        if !self.columns.is_empty() {
+            printer.print((row_header.width + 1, 0), sep);
+        }
+
+        let mut column_offset = row_header.width + 3;
+
+        let column_count = self.columns.len();
+        for (index, column) in self.columns.iter().enumerate() {
+            let printer = &printer.offset((column_offset, 0)).focused(true);
+
+            col_cb(printer, column, index);
+
+            if 1 + index < column_count {
+                printer.print((column.width + 1, 0), sep);
+            }
+
+            column_offset += column.width + 3;
+        }
+    }
+
+    fn draw_item(&self, printer: &Printer, i: usize) {
+        let item = &self.items[i];
+        let focused_row = i == self.focus && self.enabled;
+        let focused_col = self.focus_col;
+        self.draw_columns(
+            printer,
+            "┆ ",
+            |printer, row_header| {
+                let value = item.to_row();
+                row_header.draw_row(printer, value.as_str());
+            },
+            |printer, column, index| {
+                let color = if focused_row && index == focused_col {
+                    if printer.focused {
+                        theme::ColorStyle::highlight()
+                    } else {
+                        theme::ColorStyle::highlight_inactive()
+                    }
+                } else {
+                    theme::ColorStyle::primary()
+                };
+                let value = item.to_column(column.column);
+                printer.with_color(color, |printer| {
+                    column.draw_row(printer, value.as_str());
+                });
+            },
+        );
+    }
+
+    fn on_focus_change(&self) -> EventResult {
+        let row = self.row().unwrap();
+        let column = match self.columns.get(self.focus_col) {
+            Some(column) => column.column,
+            None => return EventResult::Ignored,
+        };
+        EventResult::Consumed(
+            self.on_select
+                .clone()
+                .map(|cb| Callback::from_fn(move |s| cb(s, row, column))),
+        )
+    }
+
+    fn focus_up(&mut self, n: usize) {
+        self.focus -= cmp::min(self.focus, n);
+    }
+
+    fn focus_down(&mut self, n: usize) {
+        self.focus = cmp::min(self.focus + n, self.items.len().saturating_sub(1));
+    }
+
+    fn draw_content(&self, printer: &Printer) {
+        let row_count = self.items.len();
+        for i in 0..row_count {
+            let row_y = self.row_y(i);
+            let printer = printer.offset((0, row_y));
+            self.draw_item(&printer, i);
+
+            self.draw_columns(
+                &printer.offset((0, 1)).focused(true),
+                "┼─",
+                |printer, row_header| {
+                    printer.print_hline((0, 0), row_header.width + 1, "─");
+                },
+                |printer, column, _| {
+                    printer.print_hline((0, 0), column.width + 1, "─");
+                },
+            );
+        }
+    }
+
+    fn layout_content(&mut self, size: Vec2) {
+        let column_count = self.columns.len() + 1;
+
+        // Split up all columns into sized / unsized groups
+        let (mut sized, mut flexible): (Vec<&mut TableColumn<H>>, Vec<&mut TableColumn<H>>) = self
+            .columns
+            .iter_mut()
+            .partition(|c| c.requested_width.is_some());
+
+        // Subtract one for the separators between our columns (that's column_count - 1)
+        let available_width = size.x.saturating_sub(column_count.saturating_sub(1) * 3);
+
+        // Calculate widths for all requested columns
+        let mut remaining_width = available_width;
+        if let Some(requested_width) = self.row_header.requested_width.as_ref() {
+            self.row_header.width = match *requested_width {
+                TableColumnWidth::Percent(width) => cmp::min(
+                    (size.x as f32 / 100.0 * width as f32).ceil() as usize,
+                    remaining_width,
+                ),
+                TableColumnWidth::Absolute(width) => width,
+            };
+            remaining_width = remaining_width.saturating_sub(self.row_header.width);
+        }
+
+        for column in &mut sized {
+            column.width = match *column.requested_width.as_ref().unwrap() {
+                TableColumnWidth::Percent(width) => cmp::min(
+                    (size.x as f32 / 100.0 * width as f32).ceil() as usize,
+                    remaining_width,
+                ),
+                TableColumnWidth::Absolute(width) => width,
+            };
+            remaining_width = remaining_width.saturating_sub(column.width);
+        }
+
+        // Spread the remaining width across the unsized columns.
+        let mut remaining_columns = flexible.len();
+        if self.row_header.requested_width.is_none() {
+            remaining_columns += 1;
+        }
+
+        let base_width = if remaining_columns > 0 {
+            remaining_width / remaining_columns
+        } else {
+            0
+        };
+
+        if self.row_header.requested_width.is_none() {
+            self.row_header.width = base_width;
+        }
+
+        for column in &mut flexible {
+            column.width = base_width;
+        }
+
+        self.needs_relayout = false;
+    }
+
+    fn content_required_size(&mut self, req: Vec2) -> Vec2 {
+        let rows = self.items.len();
+        let height = rows.saturating_mul(2);
+        Vec2::new(req.x, height)
+    }
+
+    fn on_inner_event(&mut self, event: Event) -> EventResult {
+        let last_focus = (self.focus, self.focus_col);
+        match event {
+            Event::Key(Key::Up) if self.focus > 0 => {
+                self.focus_up(1);
+            }
+            Event::Key(Key::Down) if self.focus + 1 < self.items.len() => {
+                self.focus_down(1);
+            }
+            Event::Key(Key::Left) if self.focus_col > 0 => {
+                self.focus_col -= 1;
+            }
+            Event::Key(Key::Right) if self.focus_col + 1 < self.columns.len() => {
+                self.focus_col += 1;
+            }
+            Event::Key(Key::PageUp) => {
+                self.focus_up(10);
+            }
+            Event::Key(Key::PageDown) => {
+                self.focus_down(10);
+            }
+            Event::Key(Key::Home) => {
+                self.focus = 0;
+            }
+            Event::Key(Key::End) => {
+                self.focus = self.items.len().saturating_sub(1);
+            }
+            Event::Key(Key::Enter) => {
+                if !self.is_empty() && self.on_submit.is_some() {
+                    return self.on_submit_event();
+                }
+            }
+            Event::Mouse {
+                position,
+                offset,
+                event: MouseEvent::Press(MouseButton::Left),
+            } if !self.is_empty() => {
+                if let Some(position) = position.checked_sub(offset) {
+                    let row = self.row_for_y(position.y);
+                    let column = self.column_for_x(position.x);
+                    if let (Some(row), Some(column)) = (row, column) {
+                        if row == self.focus && column == self.focus_col {
+                            return self.on_submit_event();
+                        }
+                        if row < self.items.len() {
+                            self.focus = row;
+                            self.focus_col = column;
+                        }
+                    } else {
+                        return EventResult::Ignored;
+                    }
+                } else {
+                    return EventResult::Ignored;
+                }
+            }
+            Event::Mouse {
+                position,
+                offset,
+                event: MouseEvent::Press(_),
+            } if !self.is_empty() => {
+                if let Some(position) = position.checked_sub(offset) {
+                    let row = self.row_for_y(position.y);
+                    let column = self.column_for_x(position.x);
+                    if let (Some(row), Some(column)) = (row, column) {
+                        if row < self.items.len() {
+                            self.focus = row;
+                            self.focus_col = column;
+                        }
+                    } else {
+                        return EventResult::Ignored;
+                    }
+                } else {
+                    return EventResult::Ignored;
+                }
+            }
+            _ => return EventResult::Ignored,
+        }
+
+        let focus = (self.focus, self.focus_col);
+
+        if !self.is_empty() && last_focus != focus {
+            self.on_focus_change()
+        } else {
+            EventResult::Ignored
+        }
+    }
+
+    fn inner_important_area(&self, size: Vec2) -> Rect {
+        Rect::from_size((0, self.row_y(self.focus)), (size.x, 1))
+    }
+
+    fn on_submit_event(&mut self) -> EventResult {
+        if let Some(cb) = &self.on_submit {
+            let cb = Arc::clone(cb);
+            let row = self.row().unwrap();
+            let column = match self.columns.get(self.focus_col) {
+                Some(column) => column.column,
+                None => return EventResult::Ignored,
+            };
+            return EventResult::Consumed(Some(Callback::from_fn(move |s| cb(s, row, column))));
+        }
+        EventResult::Ignored
+    }
+}
+
+impl<T, H> View for ArrayView<T, H>
+where
+    T: ArrayViewItem<H> + Send + Sync + 'static,
+    H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
+{
+    fn draw(&self, printer: &Printer) {
+        self.draw_columns(
+            printer,
+            "╷ ",
+            |printer, row_header| {
+                let title = self.array_name.as_str();
+                printer.with_color(theme::ColorStyle::primary(), |printer| {
+                    row_header.draw_header(printer, title);
+                });
+            },
+            |printer, column, _| {
+                printer.with_color(theme::ColorStyle::primary(), |printer| {
+                    column.draw_header(printer, false);
+                });
+            },
+        );
+
+        self.draw_columns(
+            &printer.offset((0, 1)).focused(true),
+            "┴─",
+            |printer, row_header| {
+                printer.print_hline((0, 0), row_header.width + 1, "─");
+            },
+            |printer, column, _| {
+                printer.print_hline((0, 0), column.width + 1, "─");
+            },
+        );
+
+        // Extend the vertical bars to the end of the view.
+        let available_height = printer.size.y.saturating_sub(2);
+        let filled_rows = self.items.len().saturating_mul(2).min(available_height);
+        for y in 2 + filled_rows..printer.size.y {
+            self.draw_columns(
+                &printer.offset((0, y)),
+                "┆ ",
+                |_, _| (),
+                |_, _, _| (),
+            );
+        }
+
+        let printer = &printer.offset((0, 2)).focused(true);
+        scroll::draw(self, printer, Self::draw_content);
+    }
+
+    fn layout(&mut self, size: Vec2) {
+        scroll::layout(
+            self,
+            size.saturating_sub((0, 2)),
+            self.needs_relayout,
+            Self::layout_content,
+            Self::content_required_size,
+        );
+    }
+
+    fn take_focus(&mut self, _: Direction) -> Result<EventResult, CannotFocus> {
+        self.enabled.then(EventResult::consumed).ok_or(CannotFocus)
+    }
+
+    fn on_event(&mut self, event: Event) -> EventResult {
+        if !self.enabled {
+            return EventResult::Ignored;
+        }
+
+        match event {
+            Event::Mouse {
+                position,
+                offset,
+                event: MouseEvent::Press(_),
+            } if position.checked_sub(offset).map_or(false, |p| p.y < 2) => EventResult::Ignored,
+            event => scroll::on_event(
+                self,
+                event.relativized((0, 2)),
+                Self::on_inner_event,
+                Self::inner_important_area,
+            ),
+        }
+    }
+
+    fn important_area(&self, size: Vec2) -> Rect {
+        self.inner_important_area(size.saturating_sub((0, 2))) + (0, 2)
+    }
+}
+
+/// A type used for the construction of the row header in an
+/// [`ArrayView`](struct.ArrayView.html).
+pub struct ArrayRowHeader {
+    alignment: HAlign,
+    width: usize,
+    requested_width: Option<TableColumnWidth>,
+}
+
+impl ArrayRowHeader {
+    /// Sets the horizontal text alignment of the row header.
+    pub fn align(mut self, alignment: HAlign) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Sets how many characters of width this row header will try to occupy.
+    pub fn width(mut self, width: usize) -> Self {
+        self.requested_width = Some(TableColumnWidth::Absolute(width));
+        self
+    }
+
+    /// Sets what percentage of the width of the entire array this row header
+    /// will try to occupy.
+    pub fn width_percent(mut self, width: usize) -> Self {
+        self.requested_width = Some(TableColumnWidth::Percent(width));
+        self
+    }
+
+    fn new() -> Self {
+        Self {
+            alignment: HAlign::Left,
+            width: 0,
+            requested_width: None,
+        }
+    }
+
+    fn draw_header(&self, printer: &Printer, title: &str) {
+        let header = match self.alignment {
+            HAlign::Left => format!("{:<width$}", title, width = self.width),
+            HAlign::Right => format!("{:>width$}", title, width = self.width),
+            HAlign::Center => format!("{:^width$}", title, width = self.width),
+        };
+
+        printer.print((0, 0), header.as_str());
+    }
+
+    fn draw_row(&self, printer: &Printer, value: &str) {
+        let value = match self.alignment {
+            HAlign::Left => format!("{:<width$} ", value, width = self.width),
+            HAlign::Right => format!("{:>width$} ", value, width = self.width),
+            HAlign::Center => format!("{:^width$} ", value, width = self.width),
+        };
+
+        printer.print((0, 0), value.as_str());
     }
 }
 

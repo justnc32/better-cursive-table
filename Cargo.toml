@@ -1,12 +1,12 @@
 [package]
-name = "better-cursive-table"
-version = "0.1.0"
+name = "better_cursive_table"
+version = "0.2.0"
 edition = "2024"
-authors = ["Justin Coute <jcoute59@gmail.com>, Ivo Wetzel <ivo.wetzel@googlemail.com>", "Alexandre Bury <alexandre.bury@gmail.com>"]
-description = "A basic table view implementation for cursive."
-repository = "https://github.com/justnc32/better-cursive-table.git"
+authors = ["Justin Coute <jcoute59@gmail.com>"]
+description = "TableView and ArrayView for Cursive TUIs"
+repository = "https://github.com/justnc32/better_cursive_table.git"
 readme = "README.md"
-keywords = ["cursive", "ncurses", "TUI", "UI", "table"]
+keywords = ["cursive", "ncurses", "TUI", "UI", "table", "array"]
 categories = ["command-line-interface", "gui"]
 license = "MIT/Apache-2.0"
 
