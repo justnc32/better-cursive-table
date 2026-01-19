@@ -14,8 +14,8 @@ with all original functionality plus a toggle to disable sorting and header sele
 
 
 ![TableView example](examples/images/basic.png)
-![ArrayView example](examples/images/array.png)
 ![Non-sortable table example](examples/images/non_sortable.png)
+![ArrayView example](examples/images/array.png)
 
 ## Install
 
