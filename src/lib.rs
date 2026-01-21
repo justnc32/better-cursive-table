@@ -10,7 +10,7 @@
 )]
 
 // Crate Dependencies ---------------------------------------------------------
-extern crate cursive_core as cursive;
+use cursive_core as cursive;
 
 // STD Dependencies -----------------------------------------------------------
 use std::cmp::{self, Ordering};
@@ -45,6 +45,15 @@ where
         Self: Sized;
 }
 
+/// Controls whether a table selection targets rows or individual cells.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SelectMode {
+    /// Selection is row-based.
+    Row,
+    /// Selection is cell-based.
+    Cell,
+}
+
 /// A trait for displaying items inside an
 /// [`ArrayView`](struct.ArrayView.html).
 pub trait ArrayViewItem<H>: Clone + Sized
@@ -58,6 +67,495 @@ where
     /// Method returning a string representation of the item for the row
     /// header.
     fn to_row(&self) -> String;
+
+    /// Returns the column definitions used by [`ArrayViewItem::to_array_view`].
+    ///
+    /// The default implementation returns an empty list, creating an
+    /// `ArrayView` with no columns.
+    fn columns() -> Vec<(H, String)> {
+        Vec::new()
+    }
+
+    /// Creates an [`ArrayView`](struct.ArrayView.html) from the provided items.
+    ///
+    /// Columns are populated from [`ArrayViewItem::columns`].
+    fn to_array_view(items: Vec<Self>) -> ArrayView<Self, H>
+    where
+        Self: Sized,
+    {
+        let mut array = ArrayView::<Self, H>::new();
+        for (column, title) in Self::columns() {
+            array.add_column(column, title, |c| c);
+        }
+        array.set_items(items);
+        array
+    }
+}
+
+/// A simple row type for building array views from raw headers and data.
+///
+/// Row labels are stored separately and referenced by index.
+#[derive(Clone)]
+pub struct ArrayDataRow<T> {
+    row_index: usize,
+    row_headers: Arc<Vec<String>>,
+    cells: Vec<T>,
+}
+
+impl<T> ArrayDataRow<T> {
+    fn new(row_index: usize, row_headers: Arc<Vec<String>>, cells: Vec<T>) -> Self {
+        Self {
+            row_index,
+            row_headers,
+            cells,
+        }
+    }
+}
+
+impl<T> ArrayViewItem<usize> for ArrayDataRow<T>
+where
+    T: ToString + Clone,
+{
+    fn to_column(&self, column: usize) -> String {
+        self.cells
+            .get(column)
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    }
+
+    fn to_row(&self) -> String {
+        self.row_headers
+            .get(self.row_index)
+            .cloned()
+            .unwrap_or_else(|| format!("R{}", self.row_index + 1))
+    }
+}
+
+/// A builder for creating `ArrayView` instances from headers and raw data.
+pub struct ArrayBuilder<T> {
+    row_headers: Vec<String>,
+    column_headers: Vec<String>,
+    array_name: Option<String>,
+    data: Vec<Vec<T>>,
+    row_header_alignment: HAlign,
+    column_header_alignment: HAlign,
+    data_alignment: HAlign,
+}
+
+impl<T> Default for ArrayBuilder<T> {
+    fn default() -> Self {
+        Self {
+            row_headers: Vec::new(),
+            column_headers: Vec::new(),
+            array_name: None,
+            data: Vec::new(),
+            row_header_alignment: HAlign::Center,
+            column_header_alignment: HAlign::Center,
+            data_alignment: HAlign::Center,
+        }
+    }
+}
+
+impl<T> ArrayBuilder<T>
+where
+    T: ToString + Clone,
+{
+    /// Creates a new empty builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the row header labels.
+    pub fn row_header<S: Into<String>>(mut self, rows: Vec<S>) -> Self {
+        self.row_headers = rows.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the row header labels.
+    pub fn row_headers<S: Into<String>>(self, rows: Vec<S>) -> Self {
+        self.row_header(rows)
+    }
+
+    /// Sets the column header labels.
+    pub fn column_header<S: Into<String>>(mut self, columns: Vec<S>) -> Self {
+        self.column_headers = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the column header labels.
+    pub fn column_headers<S: Into<String>>(self, columns: Vec<S>) -> Self {
+        self.column_header(columns)
+    }
+
+    /// Sets the row header alignment.
+    pub fn row_header_orientation(mut self, alignment: HAlign) -> Self {
+        self.row_header_alignment = alignment;
+        self
+    }
+
+    /// Sets the column header alignment.
+    pub fn column_header_orientation(mut self, alignment: HAlign) -> Self {
+        self.column_header_alignment = alignment;
+        self
+    }
+
+    /// Sets the data cell alignment.
+    pub fn data_orientation(mut self, alignment: HAlign) -> Self {
+        self.data_alignment = alignment;
+        self
+    }
+
+    /// Sets the top-left array name.
+    pub fn array_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.array_name = Some(name.into());
+        self
+    }
+
+    /// Sets the raw row data.
+    pub fn data(mut self, data: Vec<Vec<T>>) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Adds a column header.
+    pub fn add_column<S: Into<String>>(mut self, column: S) -> Self {
+        self.column_headers.push(column.into());
+        self
+    }
+
+    /// Adds a column header and appends a default value to each existing row.
+    pub fn add_column_with_default<S: Into<String>>(mut self, column: S, default: T) -> Self {
+        self.column_headers.push(column.into());
+        for row in &mut self.data {
+            row.push(default.clone());
+        }
+        self
+    }
+
+    /// Builds the array view using `usize` column keys.
+    pub fn add_row<S: Into<String>>(mut self, row: S, data: Vec<T>) -> Self {
+        self.row_headers.push(row.into());
+        self.data.push(data);
+        self
+    }
+
+    /// Removes the last row, if any.
+    pub fn remove_row(mut self) -> Self {
+        if self.data.pop().is_some() {
+            self.row_headers.pop();
+        }
+        self
+    }
+
+    /// Removes the last column, if any.
+    pub fn remove_column(mut self) -> Self {
+        if self.column_headers.pop().is_some() {
+            for row in &mut self.data {
+                row.pop();
+            }
+        }
+        self
+    }
+
+    /// Builds the array view using `usize` column keys.
+    pub fn build(self) -> ArrayView<ArrayDataRow<T>, usize> {
+        let col_count = if self.column_headers.is_empty() {
+            self.data.iter().map(Vec::len).max().unwrap_or(0)
+        } else {
+            self.column_headers.len()
+        };
+
+        let mut row_headers = self.row_headers;
+        if row_headers.len() < self.data.len() {
+            let start = row_headers.len();
+            let end = self.data.len();
+            row_headers.extend((start..end).map(|i| format!("R{}", i + 1)));
+        }
+
+        let mut row_header_width = row_headers
+            .iter()
+            .map(|header| header.chars().count())
+            .max()
+            .unwrap_or(0);
+        if let Some(name) = self.array_name.as_ref() {
+            row_header_width = row_header_width.max(name.chars().count());
+        }
+
+        let mut titles = Vec::with_capacity(col_count);
+        let mut column_widths = vec![0; col_count];
+        for i in 0..col_count {
+            let title = self
+                .column_headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("C{}", i + 1));
+            column_widths[i] = title.chars().count();
+            titles.push(title);
+        }
+
+        for row in &self.data {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let width = cell.to_string().chars().count();
+                if width > column_widths[i] {
+                    column_widths[i] = width;
+                }
+            }
+        }
+        let mut array = ArrayView::<ArrayDataRow<T>, usize>::new();
+        array.set_row_header(|h| {
+            let h = h.align(self.row_header_alignment);
+            if row_header_width > 0 {
+                h.width(row_header_width)
+            } else {
+                h
+            }
+        });
+
+        for i in 0..col_count {
+            let title = titles[i].clone();
+            let width = column_widths[i];
+            let column_header_alignment = self.column_header_alignment;
+            let data_alignment = self.data_alignment;
+            array.add_column(i, title, move |c| {
+                let c = c.align(data_alignment).header_align(column_header_alignment);
+                if width > 0 {
+                    c.width(width)
+                } else {
+                    c
+                }
+            });
+        }
+
+        let row_headers = Arc::new(row_headers);
+        let mut items = Vec::with_capacity(self.data.len());
+        for (i, mut cells) in self.data.into_iter().enumerate() {
+            if col_count > 0 && cells.len() > col_count {
+                cells.truncate(col_count);
+            }
+            items.push(ArrayDataRow::new(i, Arc::clone(&row_headers), cells));
+        }
+        array.set_items(items);
+
+        if let Some(name) = self.array_name {
+            array.set_array_name(name);
+        }
+
+        array
+    }
+}
+
+/// A simple row type for building table views from raw headers and data.
+#[derive(Clone)]
+pub struct TableDataRow<T> {
+    cells: Vec<T>,
+}
+
+impl<T> TableDataRow<T> {
+    fn new(cells: Vec<T>) -> Self {
+        Self { cells }
+    }
+}
+
+impl<T> TableViewItem<usize> for TableDataRow<T>
+where
+    T: ToString + Clone,
+{
+    fn to_column(&self, column: usize) -> String {
+        self.cells
+            .get(column)
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    }
+
+    fn cmp(&self, other: &Self, column: usize) -> Ordering {
+        let left = self
+            .cells
+            .get(column)
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let right = other
+            .cells
+            .get(column)
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        left.cmp(&right)
+    }
+}
+
+/// A builder for creating `TableView` instances from headers and raw data.
+pub struct TableBuilder<T> {
+    column_headers: Vec<String>,
+    data: Vec<Vec<T>>,
+    column_header_alignment: HAlign,
+    data_alignment: HAlign,
+    sortable: bool,
+}
+
+impl<T> Default for TableBuilder<T> {
+    fn default() -> Self {
+        Self {
+            column_headers: Vec::new(),
+            data: Vec::new(),
+            column_header_alignment: HAlign::Center,
+            data_alignment: HAlign::Center,
+            sortable: false,
+        }
+    }
+}
+
+impl<T> TableBuilder<T>
+where
+    T: ToString + Clone,
+{
+    /// Creates a new empty builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the column header labels.
+    pub fn column_header<S: Into<String>>(mut self, columns: Vec<S>) -> Self {
+        self.column_headers = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the column header labels.
+    pub fn column_headers<S: Into<String>>(self, columns: Vec<S>) -> Self {
+        self.column_header(columns)
+    }
+
+    /// Sets the column header alignment.
+    pub fn column_header_orientation(mut self, alignment: HAlign) -> Self {
+        self.column_header_alignment = alignment;
+        self
+    }
+
+    /// Sets the data cell alignment.
+    pub fn data_orientation(mut self, alignment: HAlign) -> Self {
+        self.data_alignment = alignment;
+        self
+    }
+
+    /// Enables or disables sorting.
+    pub fn sortable(mut self, sortable: bool) -> Self {
+        self.sortable = sortable;
+        self
+    }
+
+    /// Sets the raw row data.
+    pub fn data(mut self, data: Vec<Vec<T>>) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Adds a column header.
+    pub fn add_column<S: Into<String>>(mut self, column: S) -> Self {
+        self.column_headers.push(column.into());
+        self
+    }
+
+    /// Adds a column header and appends a default value to each existing row.
+    pub fn add_column_with_default<S: Into<String>>(mut self, column: S, default: T) -> Self {
+        self.column_headers.push(column.into());
+        for row in &mut self.data {
+            row.push(default.clone());
+        }
+        self
+    }
+
+    /// Adds a row of data.
+    pub fn add_row(mut self, data: Vec<T>) -> Self {
+        self.data.push(data);
+        self
+    }
+
+    /// Removes the last row, if any.
+    pub fn remove_row(mut self) -> Self {
+        self.data.pop();
+        self
+    }
+
+    /// Removes the last column, if any.
+    pub fn remove_column(mut self) -> Self {
+        if self.column_headers.pop().is_some() {
+            for row in &mut self.data {
+                row.pop();
+            }
+        }
+        self
+    }
+
+    /// Builds the table view using `usize` column keys.
+    pub fn build(self) -> TableView<TableDataRow<T>, usize> {
+        let col_count = if self.column_headers.is_empty() {
+            self.data.iter().map(Vec::len).max().unwrap_or(0)
+        } else {
+            self.column_headers.len()
+        };
+
+        let mut titles = Vec::with_capacity(col_count);
+        let mut column_widths = vec![0; col_count];
+        for i in 0..col_count {
+            let title = self
+                .column_headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("C{}", i + 1));
+            column_widths[i] = title.chars().count();
+            titles.push(title);
+        }
+
+        for row in &self.data {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let width = cell.to_string().chars().count();
+                if width > column_widths[i] {
+                    column_widths[i] = width;
+                }
+            }
+        }
+        if self.sortable {
+            for (i, title) in titles.iter().enumerate() {
+                let target = title.chars().count().saturating_add(4);
+                if column_widths[i] < target {
+                    column_widths[i] = target;
+                }
+            }
+        }
+
+        let mut table = TableView::<TableDataRow<T>, usize>::new();
+        for i in 0..col_count {
+            let title = titles[i].clone();
+            let width = column_widths[i];
+            let header_alignment = self.column_header_alignment;
+            let data_alignment = self.data_alignment;
+            table.add_column(i, title, move |c| {
+                let c = c.align(data_alignment).header_align(header_alignment);
+                if width > 0 {
+                    c.width(width)
+                } else {
+                    c
+                }
+            });
+        }
+
+        table.set_sortable(self.sortable);
+
+        let mut items = Vec::with_capacity(self.data.len());
+        for mut row in self.data.into_iter() {
+            if col_count > 0 && row.len() > col_count {
+                row.truncate(col_count);
+            }
+            items.push(TableDataRow::new(row));
+        }
+        table.set_items(items);
+
+        table
+    }
 }
 
 /// Callback used when a column is sorted.
@@ -146,6 +644,7 @@ pub struct TableView<T, H> {
     column_indices: HashMap<H, usize>,
 
     focus: usize,
+    focus_col: usize,
     items: Vec<T>,
     // Row index -> item index after sorting.
     rows_to_items: Vec<usize>,
@@ -154,7 +653,9 @@ pub struct TableView<T, H> {
     // TODO Pass drawing offsets into the handlers so a popup menu
     // can be created easily?
     on_submit: Option<IndexCallback>,
+    on_submit_cell: Option<CellCallback<H>>,
     on_select: Option<IndexCallback>,
+    selection_mode: SelectMode,
 }
 
 cursive::impl_scroller!(TableView < T, H > ::scroll_core);
@@ -219,12 +720,15 @@ where
             column_indices: HashMap::new(),
 
             focus: 0,
+            focus_col: 0,
             items: Vec::new(),
             rows_to_items: Vec::new(),
 
             on_sort: None,
             on_submit: None,
+            on_submit_cell: None,
             on_select: None,
+            selection_mode: SelectMode::Row,
         }
     }
 
@@ -266,6 +770,11 @@ where
 
         let column = self.columns.remove(i);
         self.column_indices.remove(&column.column);
+        if self.focus_col >= self.columns.len() {
+            self.focus_col = self.columns.len().saturating_sub(1);
+        } else if i <= self.focus_col {
+            self.focus_col = self.focus_col.saturating_sub(1);
+        }
         self.needs_relayout = true;
     }
 
@@ -290,6 +799,10 @@ where
         self.columns
             .insert(i, callback(TableColumn::new(column, title.into())));
 
+        if i <= self.focus_col {
+            self.focus_col += 1;
+        }
+
         // Make the first column the default one
         if self.columns.len() == 1 {
             self.set_default_column(column);
@@ -313,6 +826,9 @@ where
                 } else {
                     c.order = Ordering::Equal;
                 }
+            }
+            if let Some(index) = self.column_indices.get(&column) {
+                self.focus_col = *index;
             }
         }
     }
@@ -383,6 +899,22 @@ where
     pub fn set_sortable(&mut self, sortable: bool) {
         self.sortable = sortable;
         self.column_select &= sortable;
+    }
+
+    /// Sets the selection mode for this table.
+    pub fn set_selection_mode(&mut self, mode: SelectMode) {
+        self.selection_mode = mode;
+        if mode == SelectMode::Row {
+            self.column_select = false;
+        }
+    }
+
+    /// Sets the selection mode for this table.
+    ///
+    /// Chainable variant.
+    pub fn selection_mode(mut self, mode: SelectMode) -> Self {
+        self.set_selection_mode(mode);
+        self
     }
 
     /// Enable or disable sorting, header selection, and sort indicators.
@@ -506,6 +1038,17 @@ where
         self.on_submit = Some(Arc::new(move |s, row, index| cb(s, row, index)));
     }
 
+    /// Sets a callback to be used when `<Enter>` is pressed while a cell
+    /// is selected.
+    ///
+    /// The currently selected row and column will be given to the callback.
+    pub fn set_on_submit_cell<F>(&mut self, cb: F)
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.on_submit_cell = Some(Arc::new(move |s, row, column| cb(s, row, column)));
+    }
+
     /// Sets a callback to be used when `<Enter>` is pressed while an item
     /// is selected.
     ///
@@ -541,6 +1084,19 @@ where
         F: Fn(&mut Cursive, usize, usize) + Send + Sync + 'static,
     {
         self.with(|t| t.set_on_submit(cb))
+    }
+
+    /// Sets a callback to be used when `<Enter>` is pressed while a cell
+    /// is selected.
+    ///
+    /// The currently selected row and column will be given to the callback.
+    ///
+    /// Chainable variant.
+    pub fn on_submit_cell<F>(self, cb: F) -> Self
+    where
+        F: Fn(&mut Cursive, usize, H) + Send + Sync + 'static,
+    {
+        self.with(|t| t.set_on_submit_cell(cb))
     }
 
     /// Sets a callback to be used when an item is selected.
@@ -868,9 +1424,33 @@ where
     }
 
     fn draw_item(&self, printer: &Printer, i: usize) {
+        let focused_row = i == self.focus && self.enabled;
+        let focused_col = self.focus_col;
         self.draw_columns(printer, "┆ ", |printer, column| {
+            let index = self.column_indices[&column.column];
+            let color = if self.selection_mode == SelectMode::Cell
+                && focused_row
+                && index == focused_col
+            {
+                if printer.focused {
+                    theme::ColorStyle::highlight()
+                } else {
+                    theme::ColorStyle::highlight_inactive()
+                }
+            } else if self.selection_mode == SelectMode::Row && focused_row {
+                if printer.focused {
+                    theme::ColorStyle::highlight()
+                } else {
+                    theme::ColorStyle::highlight_inactive()
+                }
+            } else {
+                theme::ColorStyle::primary()
+            };
+
             let value = self.items[self.rows_to_items[i]].to_column(column.column);
-            column.draw_row(printer, value.as_str());
+            printer.with_color(color, |printer| {
+                column.draw_row(printer, value.as_str());
+            });
         });
     }
 
@@ -908,6 +1488,7 @@ where
         if 1 + column < self.columns.len() {
             self.columns[column].selected = false;
             self.columns[column + 1].selected = true;
+            self.focus_col = column + 1;
             true
         } else {
             false
@@ -919,6 +1500,7 @@ where
         if column > 0 {
             self.columns[column].selected = false;
             self.columns[column - 1].selected = true;
+            self.focus_col = column - 1;
             true
         } else {
             false
@@ -1033,36 +1615,74 @@ where
     }
 
     fn content_required_size(&mut self, req: Vec2) -> Vec2 {
-        Vec2::new(req.x, self.rows_to_items.len())
+        let rows = self.rows_to_items.len();
+        let separators = self.columns.len().saturating_sub(1).saturating_mul(3);
+
+        let resolve_width = |requested: &TableColumnWidth| match *requested {
+            TableColumnWidth::Percent(width) => {
+                (req.x as f32 / 100.0 * width as f32).ceil() as usize
+            }
+            TableColumnWidth::Absolute(width) => width,
+        };
+
+        let mut width: usize = 0;
+        for column in &self.columns {
+            let col_width = column
+                .requested_width
+                .as_ref()
+                .map(resolve_width)
+                .unwrap_or(column.width);
+            width = width.saturating_add(col_width);
+        }
+
+        let width = if width == 0 {
+            req.x
+        } else {
+            width.saturating_add(separators)
+        };
+
+        Vec2::new(width, rows)
     }
 
     fn on_inner_event(&mut self, event: Event) -> EventResult {
         let last_focus = self.focus;
         match event {
             Event::Key(Key::Right) => {
-                if !self.sortable {
-                    return EventResult::Ignored;
-                }
-
-                if self.column_select {
-                    if !self.column_next() {
+                if self.selection_mode == SelectMode::Cell && !self.sortable {
+                    if self.focus_col + 1 < self.columns.len() {
+                        self.focus_col += 1;
+                    } else {
                         return EventResult::Ignored;
                     }
+                } else if self.sortable {
+                    if self.column_select {
+                        if !self.column_next() {
+                            return EventResult::Ignored;
+                        }
+                    } else {
+                        self.column_select = true;
+                    }
                 } else {
-                    self.column_select = true;
+                    return EventResult::Ignored;
                 }
             }
             Event::Key(Key::Left) => {
-                if !self.sortable {
-                    return EventResult::Ignored;
-                }
-
-                if self.column_select {
-                    if !self.column_prev() {
+                if self.selection_mode == SelectMode::Cell && !self.sortable {
+                    if self.focus_col > 0 {
+                        self.focus_col -= 1;
+                    } else {
                         return EventResult::Ignored;
                     }
+                } else if self.sortable {
+                    if self.column_select {
+                        if !self.column_prev() {
+                            return EventResult::Ignored;
+                        }
+                    } else {
+                        self.column_select = true;
+                    }
                 } else {
-                    self.column_select = true;
+                    return EventResult::Ignored;
                 }
             }
             Event::Key(Key::Up) if self.focus > 0 || self.column_select => {
@@ -1098,6 +1718,11 @@ where
             Event::Key(Key::Enter) => {
                 if self.column_select && self.sortable {
                     return self.column_select();
+                } else if !self.is_empty()
+                    && self.selection_mode == SelectMode::Cell
+                    && self.on_submit_cell.is_some()
+                {
+                    return self.on_submit_cell_event();
                 } else if !self.is_empty() && self.on_submit.is_some() {
                     return self.on_submit_event();
                 }
@@ -1111,7 +1736,15 @@ where
                     .checked_sub(offset)
                     .map_or(false, |p| p.y == self.focus) =>
             {
+                if let Some(p) = position.checked_sub(offset) {
+                    if let Some(col) = self.column_for_x(p.x) {
+                        self.focus_col = col;
+                    }
+                }
                 self.column_cancel();
+                if self.selection_mode == SelectMode::Cell && self.on_submit_cell.is_some() {
+                    return self.on_submit_cell_event();
+                }
                 return self.on_submit_event();
             }
             Event::Mouse {
@@ -1121,6 +1754,9 @@ where
             } if !self.is_empty() => match position.checked_sub(offset) {
                 Some(position) if position.y < self.rows_to_items.len() => {
                     self.column_cancel();
+                    if let Some(col) = self.column_for_x(position.x) {
+                        self.focus_col = col;
+                    }
                     self.focus = position.y;
                 }
                 _ => return EventResult::Ignored,
@@ -1152,6 +1788,18 @@ where
         }
         EventResult::Ignored
     }
+
+    fn on_submit_cell_event(&mut self) -> EventResult {
+        if let Some(cb) = &self.on_submit_cell {
+            let cb = Arc::clone(cb);
+            let row = self.row().unwrap();
+            let col_index = cmp::min(self.focus_col, self.columns.len().saturating_sub(1));
+            if let Some(column) = self.columns.get(col_index).map(|c| c.column) {
+                return EventResult::Consumed(Some(Callback::from_fn(move |s| cb(s, row, column))));
+            }
+        }
+        EventResult::Ignored
+    }
 }
 
 impl<T, H> View for TableView<T, H>
@@ -1159,6 +1807,11 @@ where
     T: TableViewItem<H> + Send + Sync + 'static,
     H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
 {
+    fn required_size(&mut self, req: Vec2) -> Vec2 {
+        let content = self.content_required_size(req);
+        Vec2::new(content.x, content.y.saturating_add(2))
+    }
+
     fn draw(&self, printer: &Printer) {
         self.draw_columns(printer, "╷ ", |printer, column| {
             let color = if self.enabled
@@ -1939,7 +2592,38 @@ where
     fn content_required_size(&mut self, req: Vec2) -> Vec2 {
         let rows = self.items.len();
         let height = rows.saturating_mul(2);
-        Vec2::new(req.x, height)
+        let separators = self.columns.len().saturating_mul(3);
+
+        let resolve_width = |requested: &TableColumnWidth| match *requested {
+            TableColumnWidth::Percent(width) => {
+                (req.x as f32 / 100.0 * width as f32).ceil() as usize
+            }
+            TableColumnWidth::Absolute(width) => width,
+        };
+
+        let mut width = self
+            .row_header
+            .requested_width
+            .as_ref()
+            .map(resolve_width)
+            .unwrap_or(self.row_header.width);
+
+        for column in &self.columns {
+            let col_width = column
+                .requested_width
+                .as_ref()
+                .map(resolve_width)
+                .unwrap_or(column.width);
+            width = width.saturating_add(col_width);
+        }
+
+        let width = if width == 0 {
+            req.x
+        } else {
+            width.saturating_add(separators).saturating_add(1)
+        };
+
+        Vec2::new(width, height)
     }
 
     fn on_inner_event(&mut self, event: Event) -> EventResult {
@@ -2052,6 +2736,11 @@ where
     T: ArrayViewItem<H> + Send + Sync + 'static,
     H: Eq + Hash + Copy + Clone + Send + Sync + 'static,
 {
+    fn required_size(&mut self, req: Vec2) -> Vec2 {
+        let content = self.content_required_size(req);
+        Vec2::new(content.x, content.y.saturating_add(2))
+    }
+
     fn draw(&self, printer: &Printer) {
         self.draw_columns(
             printer,
@@ -2199,6 +2888,7 @@ pub struct TableColumn<H> {
     title: String,
     selected: bool,
     alignment: HAlign,
+    header_alignment: Option<HAlign>,
     order: Ordering,
     width: usize,
     default_order: Ordering,
@@ -2223,6 +2913,12 @@ impl<H: Copy + Clone + 'static> TableColumn<H> {
         self
     }
 
+    /// Sets the horizontal text alignment of the column header.
+    pub fn header_align(mut self, alignment: HAlign) -> Self {
+        self.header_alignment = Some(alignment);
+        self
+    }
+
     /// Sets how many characters of width this column will try to occupy.
     pub fn width(mut self, width: usize) -> Self {
         self.requested_width = Some(TableColumnWidth::Absolute(width));
@@ -2242,6 +2938,7 @@ impl<H: Copy + Clone + 'static> TableColumn<H> {
             title,
             selected: false,
             alignment: HAlign::Left,
+            header_alignment: None,
             order: Ordering::Equal,
             width: 0,
             default_order: Ordering::Less,
@@ -2257,7 +2954,8 @@ impl<H: Copy + Clone + 'static> TableColumn<H> {
         };
         let title = self.title.as_str();
 
-        let mut header = match self.alignment {
+        let alignment = self.header_alignment.unwrap_or(self.alignment);
+        let mut header = match alignment {
             HAlign::Left => format!("{:<width$}", title, width = title_width),
             HAlign::Right => format!("{:>width$}", title, width = title_width),
             HAlign::Center => format!("{:^width$}", title, width = title_width),
@@ -2353,7 +3051,7 @@ mod tests {
             name: format!("{} Name", 11),
         });
 
-        assert!(simple_table.len() == 11);
+        assert_eq!(simple_table.len(), 11);
     }
 
     #[test]
@@ -2365,6 +3063,6 @@ mod tests {
             name: format!("{} Name", 1),
         });
 
-        assert!(simple_table.len() == 1);
+        assert_eq!(simple_table.len(), 1);
     }
 }

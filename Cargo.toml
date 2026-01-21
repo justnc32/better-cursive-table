@@ -1,10 +1,10 @@
 [package]
 name = "better-cursive-table"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Justin Coute <jcoute59@gmail.com>"]
 description = "TableView and ArrayView for Cursive TUIs"
-repository = "https://github.com/justnc32/better_cursive_table.git"
+repository = "https://github.com/justnc32/better-cursive-table.git"
 readme = "README.md"
 keywords = ["cursive", "TUI", "UI", "table", "array"]
 categories = ["command-line-interface", "gui"]
@@ -16,3 +16,6 @@ cursive_core = "0.4.0"
 [dev-dependencies]
 cursive = "0.21.0"
 rand = "0.8"
+
+[profile.dev]
+debug = 0

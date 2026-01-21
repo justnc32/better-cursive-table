@@ -4,6 +4,8 @@ TableView and ArrayView widgets for the [cursive](https://crates.io/crates/cursi
 This is a maintained fork of [cursive_table_view](https://github.com/BonsaiDen/cursive_table_view)
 with all original functionality plus a toggle to disable sorting and header selection.
 
+Links: [crates.io](https://crates.io/crates/better-cursive-table) | [docs.rs](https://docs.rs/better-cursive-table) | [GitHub](https://github.com/justnc32/better-cursive-table)
+
 ## Highlights
 
 - TableView with multi-column sort and keyboard/mouse navigation
@@ -95,41 +97,14 @@ let table = TableView::<Row, Column>::new()
 ## ArrayView (row + column headers)
 
 ```rust
-use cursive::align::HAlign;
-use better_cursive_table::{ArrayView, ArrayViewItem};
+use better_cursive_table::ArrayBuilder;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-enum Axis {
-    X,
-    Y,
-    Z,
-}
-
-#[derive(Clone)]
-struct CellRow {
-    label: String,
-    values: [i32; 3],
-}
-
-impl ArrayViewItem<Axis> for CellRow {
-    fn to_column(&self, column: Axis) -> String {
-        match column {
-            Axis::X => self.values[0].to_string(),
-            Axis::Y => self.values[1].to_string(),
-            Axis::Z => self.values[2].to_string(),
-        }
-    }
-
-    fn to_row(&self) -> String {
-        self.label.clone()
-    }
-}
-
-let mut array = ArrayView::<CellRow, Axis>::new()
-    .row_header(|h| h.width(6))
-    .column(Axis::X, "X", |c| c.align(HAlign::Center))
-    .column(Axis::Y, "Y", |c| c.align(HAlign::Center))
-    .column(Axis::Z, "Z", |c| c.align(HAlign::Center));
+let array = ArrayBuilder::new()
+    .array_name("My Array")
+    .column_header(vec!["X", "Y", "Z"])
+    .add_row("Row A", vec![1, 2, 3])
+    .add_row("Row B", vec![4, 5])
+    .build();
 ```
 
 ## Callbacks
