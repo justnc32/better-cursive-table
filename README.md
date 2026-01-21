@@ -19,68 +19,13 @@ Links: [crates.io](https://crates.io/crates/better-cursive-table) | [docs.rs](ht
 ![Non-sortable table example](examples/images/non_sortable.png)
 ![ArrayView example](examples/images/array.png)
 
-## Install
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-better_cursive_table = "0.2"
-cursive = "0.21"
-```
-
 ## Quick start (TableView)
 
 ```rust
-use std::cmp::Ordering;
-use cursive::align::HAlign;
-use cursive::traits::*;
-use better_cursive_table::{TableView, TableViewItem};
+use better_cursive_table::TableBuilder;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-enum Column {
-    Name,
-    Count,
-    Rate,
-}
-
-#[derive(Clone, Debug)]
-struct Row {
-    name: String,
-    count: usize,
-    rate: usize,
-}
-
-impl TableViewItem<Column> for Row {
-    fn to_column(&self, column: Column) -> String {
-        match column {
-            Column::Name => self.name.clone(),
-            Column::Count => self.count.to_string(),
-            Column::Rate => self.rate.to_string(),
-        }
-    }
-
-    fn cmp(&self, other: &Self, column: Column) -> Ordering {
-        match column {
-            Column::Name => self.name.cmp(&other.name),
-            Column::Count => self.count.cmp(&other.count),
-            Column::Rate => self.rate.cmp(&other.rate),
-        }
-    }
-}
-
-let mut table = TableView::<Row, Column>::new()
-    .column(Column::Name, "Name", |c| c.width_percent(30))
-    .column(Column::Count, "Count", |c| c.align(HAlign::Center))
-    .column(Column::Rate, "Rate", |c| {
-        c.ordering(Ordering::Greater).align(HAlign::Right).width_percent(20)
-    })
-    .default_column(Column::Name);
-
-table.set_items(vec![
-    Row { name: "Alpha".into(), count: 3, rate: 10 },
-    Row { name: "Beta".into(), count: 1, rate: 42 },
-]);
+let table = TableBuilder::new().column_header(vec!["A", "B", "C"])
+    .data(vec![vec![1, 3, 10], vec![2, 1, 42]]).sortable(true).build();
 ```
 
 ## Sorting disabled
@@ -88,10 +33,13 @@ table.set_items(vec![
 Disable header selection and sort indicators entirely:
 
 ```rust
-let table = TableView::<Row, Column>::new()
-    .column(Column::Name, "Name", |c| c)
-    .column(Column::Count, "Count", |c| c)
-    .sortable(false);
+use better_cursive_table::TableBuilder;
+
+let table = TableBuilder::new()
+    .column_header(vec!["A", "B"])
+    .data(vec![vec![1, 3]])
+    .sortable(false)
+    .build();
 ```
 
 ## ArrayView (row + column headers)
@@ -111,19 +59,14 @@ let array = ArrayBuilder::new()
 
 ```rust
 use std::cmp::Ordering;
-use cursive::Cursive;
+use better_cursive_table::TableBuilder;
 
-table.set_on_sort(|_siv: &mut Cursive, column, order: Ordering| {
-    // React to sorting (e.g., update status line)
-});
-
-table.set_on_select(|_siv: &mut Cursive, row, index| {
-    // Row changed
-});
-
-table.set_on_submit(|_siv: &mut Cursive, row, index| {
-    // Enter key / click on focused row
-});
+let table = TableBuilder::new()
+    .column_header(vec!["A"])
+    .data(vec![vec![1]]).build()
+    .on_sort(|_siv, _col, _order: Ordering| {})
+    .on_select(|_siv, _row, _index| {})
+    .on_submit(|_siv, _row, _index| {});
 ```
 
 ## License
