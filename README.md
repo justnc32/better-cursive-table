@@ -24,8 +24,11 @@ Links: [crates.io](https://crates.io/crates/better-cursive-table) | [docs.rs](ht
 ```rust
 use better_cursive_table::TableBuilder;
 
-let table = TableBuilder::new().column_header(vec!["A", "B", "C"])
-    .data(vec![vec![1, 3, 10], vec![2, 1, 42]]).sortable(true).build();
+let table = TableBuilder::new()
+    .column_header(vec!["A", "B", "C"])
+    .data(vec![vec![1, 3, 10], vec![2, 1, 42]])
+    .sortable(true)
+    .build();
 ```
 
 ## Sorting disabled
